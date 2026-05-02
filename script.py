@@ -17,11 +17,15 @@ file_count = 1
 
 # Cidades desejadas (em minúsculo para comparação segura)
 cidades_desejadas = [
-    "lauro de freitas",
-    "salvador",
-    "simões filho",
-    "camaçari",
-    "feira de santana"
+    "Alagoas",
+    "Ceará",
+    "Maranhão",
+    "Paraíba",
+    "Pernambuco"
+    "Piauí"
+    "Rio Grande do Norte"
+    "Sergipe"
+    "Bahia"
 ]
 
 # Baixar o feed XML comprimido
