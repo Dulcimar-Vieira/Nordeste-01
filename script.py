@@ -21,10 +21,10 @@ cidades_desejadas = [
     "Ceará",
     "Maranhão",
     "Paraíba",
-    "Pernambuco"
-    "Piauí"
-    "Rio Grande do Norte"
-    "Sergipe"
+    "Pernambuco",
+    "Piauí",
+    "Rio Grande do Norte",
+    "Sergipe",
     "Bahia"
 ]
 
