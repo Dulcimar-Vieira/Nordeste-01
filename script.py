@@ -1,128 +1,99 @@
-import requests
-import gzip
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+import gzip, hashlib, io, json, os, random, re
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import xml.etree.ElementTree as ET
-import io
-import json
-import os
+import requests
 
-# URL do feed
-feed_url = "https://feeds.whatjobs.com/sinerj/sinerj_pt_BR.xml.gz"
+FEED_URL = "https://feeds.whatjobs.com/sinerj/sinerj_pt_BR.xml.gz"
+OUTPUT_FOLDER = "json_parts"
+STATE_FILE = "daily_jobs_state.json"
+MAX_JOBS_PER_DAY = 100
+TIMEZONE = ZoneInfo("America/Sao_Paulo")
 
-# Criar pasta para os arquivos JSON
-json_folder = "json_parts"
-os.makedirs(json_folder, exist_ok=True)
+ESTADOS={"alagoas","ceará","maranhão","paraíba","pernambuco","piauí","rio grande do norte","sergipe","bahia"}
+EXCLUIDAS={"salvador","camaçari","lauro de freitas","feira de santana","simões filho"}
+def matches(city,state,title,desc):
+    return norm(state) in ESTADOS and norm(city) not in EXCLUIDAS
 
-# Contador de arquivos
-file_count = 1
+def norm(s): return (s or "").strip().lower()
+def clean(s):
+    s = re.sub(r"<[^>]+>", " ", s or "")
+    return re.sub(r"\s+", " ", s).strip()
 
-# Estados do Nordeste (minúsculo para comparação)
-estados_desejados = [
-    "alagoas",
-    "ceará",
-    "maranhão",
-    "paraíba",
-    "pernambuco",
-    "piauí",
-    "rio grande do norte",
-    "sergipe",
-    "bahia"
-]
+def parse_date(s):
+    if not s: return None
+    s=s.strip()
+    for fmt in ("%d.%m.%Y","%d/%m/%Y","%Y-%m-%d","%Y-%m-%dT%H:%M:%S","%Y-%m-%dT%H:%M:%SZ"):
+        try: return datetime.strptime(s,fmt)
+        except ValueError: pass
+    try: return datetime.fromisoformat(s.replace("Z","+00:00"))
+    except ValueError: return None
 
-# Cidades que NÃO queremos
-cidades_excluidas = [
-    "salvador",
-    "camaçari",
-    "lauro de freitas",
-    "feira de santana",
-    "simões filho"
-]
+def key(j):
+    return j["url"] or hashlib.md5(f'{j["title"]}|{j["company"]}|{j["city"]}'.encode()).hexdigest()
 
-# Mapa de estados -> sigla (para título SEO)
-siglas_estados = {
-    "alagoas": "AL",
-    "ceará": "CE",
-    "maranhão": "MA",
-    "paraíba": "PB",
-    "pernambuco": "PE",
-    "piauí": "PI",
-    "rio grande do norte": "RN",
-    "sergipe": "SE",
-    "bahia": "BA"
-}
+def intro(title, city):
+    return random.choice([
+        f"Confira a vaga para {title} em {city}. Veja os detalhes e como se candidatar.",
+        f"Nova oportunidade para {title} em {city}. Saiba mais sobre essa vaga.",
+        f"Empresa está contratando {title} em {city}. Confira requisitos e envie seu currículo."
+    ])
 
-# Baixar o feed XML comprimido
-try:
-    response = requests.get(feed_url, stream=True, timeout=60)
-except requests.exceptions.RequestException as e:
-    print(f"Erro ao baixar o feed: {e}")
-    exit(1)
+def load_state(today):
+    try:
+        with open(STATE_FILE,encoding="utf-8") as f: s=json.load(f)
+        return s.get("jobs",{}) if s.get("date")==today else {}
+    except (OSError,json.JSONDecodeError): return {}
 
-if response.status_code == 200:
-    with gzip.open(io.BytesIO(response.content), "rt", encoding="utf-8") as f:
-        jobs = []
-        for event, elem in ET.iterparse(f, events=("end",)):
-            if elem.tag == "job":
+def save_state(today,jobs):
+    with open(STATE_FILE,"w",encoding="utf-8") as f:
+        json.dump({"date":today,"jobs":jobs},f,ensure_ascii=False,indent=2)
 
-                location_elem = elem.find("locations/location")
-                city = location_elem.findtext("city", "").strip() if location_elem is not None else ""
-                state = location_elem.findtext("state", "").strip() if location_elem is not None else ""
+def main():
+    today=datetime.now(TIMEZONE).date().isoformat()
+    selected=load_state(today)
+    r=requests.get(FEED_URL,headers={"User-Agent":"Mozilla/5.0 (compatible; FeedProcessor/1.0)"},timeout=60)
+    r.raise_for_status()
+    candidates={}
+    with gzip.open(io.BytesIO(r.content),"rt",encoding="utf-8") as f:
+        for _,elem in ET.iterparse(f,events=("end",)):
+            if elem.tag!="job": continue
+            title=elem.findtext("title","").strip()
+            desc=elem.findtext("description","").strip()
+            company=elem.findtext("company/name","").strip() or "Confidencial"
+            url=elem.findtext("urlDeeplink","").strip() or elem.findtext("link","").strip()
+            typ=elem.findtext("jobType","").strip()
+            loc=elem.find("locations/location")
+            city=loc.findtext("city","").strip() if loc is not None else ""
+            state=loc.findtext("state","").strip() if loc is not None else ""
+            pub=elem.findtext("pubdate","").strip()
+            dt=parse_date(pub)
+            if not title or not url or not city or not state or not dt or dt.date().isoformat()!=today or not matches(city,state,title,desc):
+                elem.clear(); continue
+            j={"id":hashlib.md5(f"{title}-{company}-{city}-{url}".encode()).hexdigest(),
+               "title":title,"description":intro(title,city)+"\n\n"+clean(desc),
+               "company":company,"city":city,"state":state,"tipo":typ,"url":url,
+               "data_publicacao":dt.date().isoformat(),"origem":"WhatJobs"}
+            candidates[key(j)]=j
+            elem.clear()
 
-                if not city or not state:
-                    elem.clear()
-                    continue
+    for k in list(selected):
+        if k in candidates: selected[k]=candidates[k]
 
-                city_lower = city.lower()
-                state_lower = state.lower()
+    novos=[j for k,j in candidates.items() if k not in selected]
+    novos.sort(key=lambda j:j["data_publicacao"],reverse=True)
+    for j in novos:
+        if len(selected)>=MAX_JOBS_PER_DAY: break
+        selected[key(j)]=j
 
-                # FILTRO PRINCIPAL
-                if state_lower in estados_desejados and city_lower not in cidades_excluidas:
+    os.makedirs(OUTPUT_FOLDER,exist_ok=True)
+    for fn in os.listdir(OUTPUT_FOLDER):
+        if fn.endswith(".json"): os.remove(os.path.join(OUTPUT_FOLDER,fn))
+    with open(os.path.join(OUTPUT_FOLDER,"part_1.json"),"w",encoding="utf-8") as f:
+        json.dump(list(selected.values())[:MAX_JOBS_PER_DAY],f,ensure_ascii=False,indent=2)
+    save_state(today,selected)
+    print(f"Data: {today} | Encontradas hoje: {len(candidates)} | Selecionadas: {min(len(selected),MAX_JOBS_PER_DAY)}")
 
-                    company = elem.findtext("company/name", "").strip()
-                    if not company:
-                        company = "Confidencial"
-
-                    original_title = elem.findtext("title", "").strip()
-
-                    # SIGLA DO ESTADO
-                    uf = siglas_estados.get(state_lower, "")
-
-                    # TÍTULO AUTOMÁTICO SEO
-                    titulo_final = f"{original_title} em {city} ({uf})"
-
-                    job_data = {
-                        "title": titulo_final,
-                        "description": elem.findtext("description", "").strip(),
-                        "company": company,
-                        "city": city,
-                        "state": state,
-                        "url": elem.findtext("urlDeeplink", "").strip(),
-                        "tipo": elem.findtext("jobType", "").strip(),
-                    }
-
-                    jobs.append(job_data)
-
-                elem.clear()
-
-                # Salvar a cada 1000 vagas
-                if len(jobs) >= 1000:
-                    json_path = os.path.join(json_folder, f"part_{file_count}.json")
-                    with open(json_path, "w", encoding="utf-8") as json_file:
-                        json.dump(jobs, json_file, ensure_ascii=False, indent=2)
-
-                    print(f"Arquivo salvo: {json_path}")
-                    jobs = []
-                    file_count += 1
-
-        # Salvar restante
-        if jobs:
-            json_path = os.path.join(json_folder, f"part_{file_count}.json")
-            with open(json_path, "w", encoding="utf-8") as json_file:
-                json.dump(jobs, json_file, ensure_ascii=False, indent=2)
-
-            print(f"Arquivo final salvo: {json_path}")
-
-    print(f"JSONs gerados: {os.listdir(json_folder)}")
-
-else:
-    print(f"Erro ao baixar o feed: código HTTP {response.status_code}")
-    exit(1)
+if __name__=="__main__": main()
