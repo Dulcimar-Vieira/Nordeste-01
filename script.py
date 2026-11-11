@@ -139,9 +139,23 @@ def extract_salary(structured_salary, description):
 
 
 ESTADOS={"alagoas","ceara","maranhao","paraiba","pernambuco","piaui","rio grande do norte","sergipe","bahia"}
+SIGLAS_ESTADOS={
+    "al":"alagoas","ba":"bahia","ce":"ceara","ma":"maranhao",
+    "pb":"paraiba","pe":"pernambuco","pi":"piaui","rn":"rio grande do norte",
+    "se":"sergipe",
+}
 EXCLUIDAS={"salvador","camacari","lauro de freitas","feira de santana","simoes filho"}
+
 def matches(city,state,title,desc):
-    return norm(state) in ESTADOS and norm(city) not in EXCLUIDAS
+    state_norm=SIGLAS_ESTADOS.get(norm(state),norm(state))
+    city_norm=norm(city)
+    # Evita publicar cidade fictícia quando o feed repete o estado no campo cidade.
+    return (
+        state_norm in ESTADOS
+        and bool(city_norm)
+        and city_norm not in ESTADOS
+        and city_norm not in EXCLUIDAS
+    )
 
 def norm(s):
     s = unicodedata.normalize("NFKD", (s or "").strip().lower())
